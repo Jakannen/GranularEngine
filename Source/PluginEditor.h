@@ -25,6 +25,12 @@ public:
     void resized() override;
 
 private:
+
+    juce::Slider grainDensitySlider, grainSizeSlider, pitchShiftSlider, feedbackSlider, filterCutoffSlider;
+    juce::ToggleButton freezeButton;
+    juce::Label grainDensityLabel, grainSizeLabel, pitchShiftLabel, feedbackLabel, filterCutoffLabel, freezeLabel;
+
+
     // This reference is provided as a quick way for your editor to
     // access the processor object that created it.
     KannenGranularEngineAudioProcessor& audioProcessor;

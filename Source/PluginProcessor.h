@@ -53,7 +53,57 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
+    const juce::AudioBuffer<float>& getDelayBuffer() const { return delayLine; }
+
 private:
+    // Sample Rate and Buffer
+    double currentSampleRate;
+    juce::AudioBuffer<float> delayLine;
+    int delayLineWritePosition = 0;
+
+    // Grain Parameters
+    struct Grain
+    {
+        float position;            // Position in the delay line
+        float duration;            // Grain duration
+        float pitch;               // Pitch shift factor
+        float envelopeValue;       // Amplitude envelope
+        float pan;                 // Stereo spreading
+        int playbackDirection;     // 1: Forward, -1: Reverse
+    };
+
+    std::vector<Grain> activeGrains;
+
+    // Grain Generation Functions
+    void scheduleGrains();
+    float generateEnvelope(const Grain& grain, int envelopeType);
+    float applyFilter(float sample, juce::IIRFilter& filter);
+    float applyStereoPan(float sample, float pan, bool isLeft);
+
+    // Parameters
+    juce::AudioProcessorValueTreeState parameters;
+    std::atomic<float>* grainDensityParam = nullptr;
+    std::atomic<float>* grainSizeParam = nullptr;
+    std::atomic<float>* pitchShiftParam = nullptr;
+    std::atomic<float>* feedbackParam = nullptr;
+    std::atomic<float>* freezeParam = nullptr;
+    std::atomic<float>* filterCutoffParam = nullptr;
+
+    // Freeze and Modulation
+    bool freezeMode = false;
+    float freezePosition = 0.0f;
+
+    // LFO for Random Modulation
+    struct LFO {
+        float frequency, phase = 0.0f;
+        float getNextSample(float sampleRate) {
+            phase += juce::MathConstants<float>::twoPi * frequency / sampleRate;
+            if (phase > juce::MathConstants<float>::twoPi) phase -= juce::MathConstants<float>::twoPi;
+            return std::sin(phase);
+        }
+    } pitchLFO, panLFO;
+
+    juce::IIRFilter grainFilter;
     //==============================================================================
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KannenGranularEngineAudioProcessor)
 };

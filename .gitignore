@@ -1,0 +1,8 @@
+# Ignore Visual Studio temporary files 
+*.vsidx 
+*.user 
+*.suo 
+ECHO is on.
+# Ignore build output directories 
+
+Builds/VisualStudio2022

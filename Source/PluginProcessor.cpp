@@ -125,7 +125,7 @@ void KannenGranularEngineAudioProcessor::scheduleGrains()
     activeGrains.clear();
 
     // Reduce the grain density to 10 for testing (can increase later)
-    int grainCount = 10; // Reduce density for testing
+    int grainCount = 100; // Reduce density for testing
 
     // Schedule grains at different positions in the delay line
     for (int i = 0; i < grainCount; ++i)
@@ -136,7 +136,7 @@ void KannenGranularEngineAudioProcessor::scheduleGrains()
         grain.position = juce::Random::getSystemRandom().nextFloat() * delayLine.getNumSamples();
 
         // Convert grain size from milliseconds to samples
-        grain.duration = *grainSizeParam / 1000.0f * currentSampleRate;  // Grain size in samples
+        grain.duration = *grainSizeParam / 100.0f * currentSampleRate;  // Grain size in samples
 
         // Assign random pitch and playback direction
         grain.pitch = juce::Random::getSystemRandom().nextFloat() * 0.5f + 0.75f;  // Slight pitch variation

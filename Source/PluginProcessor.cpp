@@ -122,29 +122,20 @@ void KannenGranularEngineAudioProcessor::releaseResources()
 
 void KannenGranularEngineAudioProcessor::scheduleGrains()
 {
-    activeGrains.clear();
+   float density = *grainDensityParam;
+   float blockTime = getBlockSize() / currentSampleRate;
+   int grainsToAdd = static_cast<int>(density * blockTime + 0.5f);
 
-    // Reduce the grain density to 10 for testing (can increase later)
-    int grainCount = 10; // Reduce density for testing
-
-    // Schedule grains at different positions in the delay line
-    for (int i = 0; i < grainCount; ++i)
-    {
-        Grain grain;
-
-        // Position grain randomly within the delay line
-        grain.position = juce::Random::getSystemRandom().nextFloat() * delayLine.getNumSamples();
-
-        // Convert grain size from milliseconds to samples
-        grain.duration = *grainSizeParam / 10.0f * currentSampleRate;  // Grain size in samples
-
-        // Assign random pitch and playback direction
-        grain.pitch = juce::Random::getSystemRandom().nextFloat() * 0.5f + 0.75f;  // Slight pitch variation
-        grain.playbackDirection = (juce::Random::getSystemRandom().nextFloat() > 0.66f) ? 1 : -1;  // Random direction
-
-        // Add the grain to the active grains list
-        activeGrains.push_back(grain);
-    }
+   for (int i = 0; i < grainsToAdd; ++i)
+   {
+       Grain grain;
+       grain.startChannel = juce::Random::getSystemRandom().nextInt(getTotalNumInputChannels());
+       grain.position = juce::Random::getSystemRandom().nextFloat() * delayLine.getNumSamples();
+       grain.duration = (*grainSizeParam / 1000.0f) * currentSampleRate;
+       grain.pitch = pow(2.0f, *pitchShiftParam / 12.0f); // Semitones to ratio
+       grain.playbackDirection = juce::Random::getSystemRandom().nextBool() ? 1 : -1;
+       activeGrains.add(grain);
+   }
 }
 
 float KannenGranularEngineAudioProcessor::generateEnvelope(const Grain& grain, int envelopeType)
@@ -184,67 +175,91 @@ bool KannenGranularEngineAudioProcessor::isBusesLayoutSupported (const BusesLayo
 }
 #endif
 
-void KannenGranularEngineAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
+void KannenGranularEngineAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
+    juce::ScopedNoDenormals noDenormals;
     auto totalNumInputChannels = getTotalNumInputChannels();
+    auto totalNumOutputChannels = getTotalNumOutputChannels();
     auto numSamples = buffer.getNumSamples();
 
-    // Get the feedback value from the parameter
-    float feedback = juce::jlimit(0.0f, 0.1f, feedbackParam->load()); // Limit feedback to a reasonable value
+    // Update filter if needed
+    if (*filterCutoffParam != lastFilterCutoff)
+    {
+        grainFilter.setCoefficients(juce::IIRCoefficients::makeLowPass(currentSampleRate, *filterCutoffParam));
+        lastFilterCutoff = *filterCutoffParam;
+    }
 
-    // Ensure delay line is large enough for input buffer size
-    if (delayLine.getNumSamples() < numSamples)
-        delayLine.setSize(totalNumInputChannels, numSamples * 2);  // Double the buffer size for safety
-
-    // Process each channel of the input
+    // Write input to delay line with feedback
     for (int channel = 0; channel < totalNumInputChannels; ++channel)
     {
-        auto* inputChannelData = buffer.getReadPointer(channel);  // Input audio
-        auto* outputChannelData = buffer.getWritePointer(channel); // Output audio
-        auto* delayData = delayLine.getWritePointer(channel);      // Delay line storage for grains
+        const float* input = buffer.getReadPointer(channel);
+        float* delayData = delayLine.getWritePointer(channel);
+        int writePos = delayLineWritePosition;
 
-        for (int sample = 0; sample < numSamples; ++sample)
+        for (int i = 0; i < numSamples; ++i)
         {
-            // Apply feedback: store previous output to the delay line
-            delayData[delayLineWritePosition] = inputChannelData[sample] + delayData[delayLineWritePosition] * feedback;
-
-            float outputSample = 0.0f;
-
-            // Process all active grains (add random pitch shifting, envelope)
-            for (auto& grain : activeGrains)
-            {
-                int grainIndex = static_cast<int>(grain.position) % delayLine.getNumSamples();
-
-                // Apply a smooth raised cosine envelope to each grain for smooth fade-in/fade-out
-                float envelope = 0.5f * (1.0f + std::cos(juce::MathConstants<float>::pi * grain.position / grain.duration));
-                float grainSample = delayData[grainIndex] * envelope;
-
-                // Apply pitch shifting (change grain sample based on pitch)
-                grainSample *= 0.2f;  // Scale down the grain sample to prevent overloading
-
-                // Mix the grain sample into the output
-                outputSample += grainSample;
-
-                // Move grain position (pitch shifting)
-                grain.position += grain.pitch * grain.playbackDirection;
-
-                // Ensure grain position wraps within delay line bounds
-                if (grain.position >= delayLine.getNumSamples())
-                    grain.position -= delayLine.getNumSamples();
-                if (grain.position < 0)
-                    grain.position += delayLine.getNumSamples();  // Ensure position stays within bounds
-            }
-
-            // Write the processed sample to the output buffer
-            outputChannelData[sample] = juce::jlimit(-1.0f, 1.0f, outputSample);  // Ensure the output is within [-1, 1]
-
-            // Update delay line write position
-            delayLineWritePosition = (delayLineWritePosition + 1) % delayLine.getNumSamples();
+            float feedbackSample = delayData[(writePos + i) % delayLine.getNumSamples()];
+            delayData[(writePos + i) % delayLine.getNumSamples()] = input[i] + feedbackSample * *feedbackParam;
         }
     }
 
-    // Continuously schedule new grains for each block of audio
+    // Clear output buffer
+    buffer.clear();
+
+    // Process each sample
+    for (int i = 0; i < numSamples; ++i)
+    {
+        // Process each grain
+        for (int g = 0; g < activeGrains.size(); ++g)
+        {
+            auto& grain = activeGrains.getReference(g);
+            if (grain.age >= grain.duration)
+                continue;
+
+            // Calculate envelope
+            float envelope = 0.5f * (1.0f + cosf(juce::MathConstants<float>::pi * grain.age / grain.duration));
+
+            // Read from delay line with interpolation
+            int channel = grain.startChannel;
+            const float* delayData = delayLine.getReadPointer(channel);
+            int pos = static_cast<int>(grain.position);
+            float frac = grain.position - pos;
+            float sample1 = delayData[pos % delayLine.getNumSamples()];
+            float sample2 = delayData[(pos + 1) % delayLine.getNumSamples()];
+            float interpolated = sample1 + frac * (sample2 - sample1);
+
+            // Apply envelope and pitch
+            interpolated *= envelope;
+
+            // Apply filter
+            interpolated = grainFilter.processSingleSampleRaw(interpolated);
+
+            // Add to output
+            for (int outChan = 0; outChan < totalNumOutputChannels; ++outChan)
+                buffer.addSample(outChan, i, interpolated * (outChan == channel ? 1.0f : 0.5f));
+
+            // Update grain position and age
+            grain.position += grain.pitch * grain.playbackDirection;
+            grain.age += 1.0f;
+
+            // Wrap position
+            if (grain.position >= delayLine.getNumSamples())
+                grain.position -= delayLine.getNumSamples();
+            else if (grain.position < 0)
+                grain.position += delayLine.getNumSamples();
+        }
+    }
+
+    // Schedule new grains for next block
     scheduleGrains();
+
+    // Remove expired grains
+    for (int g = activeGrains.size(); --g >= 0;)
+        if (activeGrains[g].age >= activeGrains[g].duration)
+            activeGrains.remove(g);
+
+    // Update delay line write position
+    delayLineWritePosition = (delayLineWritePosition + numSamples) % delayLine.getNumSamples();
 }
 
 float KannenGranularEngineAudioProcessor::applyStereoPan(float sample, float pan, bool isLeft)

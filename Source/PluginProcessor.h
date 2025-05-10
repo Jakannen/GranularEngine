@@ -61,16 +61,14 @@ private:
     juce::AudioBuffer<float> delayLine;
     int delayLineWritePosition = 0;
 
-    // Grain Parameters
-    struct Grain
-    {
-        float position;            // Position in the delay line
-        float duration;            // Grain duration
-        float pitch;               // Pitch shift factor
-        float envelopeValue;       // Amplitude envelope
-        float pan;                 // Stereo spreading
-        int playbackDirection;     // 1: Forward, -1: Reverse
-    };
+    struct Grain {
+    float position = 0.0f;
+    float age = 0.0f;
+    float duration = 0.0f;
+    float pitch = 1.0f;
+    int playbackDirection = 1;
+    int startChannel = 0;
+};
 
     std::vector<Grain> activeGrains;
 
